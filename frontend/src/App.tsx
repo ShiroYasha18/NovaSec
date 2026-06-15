@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { LayoutDashboard, AlertTriangle, Brain, Key, Shield } from "lucide-react";
 import { colors, fonts } from "./styles/tokens";
@@ -75,12 +75,15 @@ const s: Record<string, any> = {
 
 export default function App() {
   const [view, setView] = useState<View>("dashboard");
-  const [isChaosActive, setIsChaosActive] = useState(false);
-  const stopChaosRef = { current: null as null | (() => void) };
+  const [isChaosActive, setIsChaosActive] = useState(true);
+  const stopChaosRef = useRef<null | (() => void)>(null);
 
   const {
-    incidents, activeIncident, isProcessing,
+    incidents, pendingIncidents,
+    selectedIncident, selectedIncidentId, setSelectedIncidentId,
+    processingIds, isProcessingSelected,
     commanderBrief, connectionStatus,
+    autoApproveSecondsLeft,
     fireEvent, sendResponse, askCommander, runWhatIf,
   } = useNovaSec();
 
@@ -95,8 +98,11 @@ export default function App() {
     }
   }, [isChaosActive, fireEvent]);
 
+  // Start chaos monkey on mount by default
   useEffect(() => {
+    stopChaosRef.current = startChaosMonkey(fireEvent);
     return () => { stopChaosRef.current?.(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
@@ -127,13 +133,13 @@ export default function App() {
               }}>
               <Icon size={15} />
               {label}
-              {id === "incidents" && incidents.filter((i) => !i.resolved).length > 0 && (
+              {id === "incidents" && pendingIncidents.length > 0 && (
                 <span style={{
                   marginLeft: "auto", minWidth: 18, height: 18, borderRadius: 9,
                   background: colors.accent.red, display: "flex", alignItems: "center", justifyContent: "center",
                   fontFamily: fonts.mono, fontSize: 9, color: "#fff", fontWeight: 700,
                 }}>
-                  {incidents.filter((i) => !i.resolved).length}
+                  {pendingIncidents.length}
                 </span>
               )}
             </div>
@@ -166,7 +172,7 @@ export default function App() {
             {view === "dashboard" && (
               <Dashboard
                 incidents={incidents}
-                isProcessing={isProcessing}
+                isProcessing={processingIds.size > 0}
                 isChaosActive={isChaosActive}
                 onToggleChaos={handleToggleChaos}
                 onFireEvent={fireEvent}
@@ -174,18 +180,23 @@ export default function App() {
             )}
             {view === "incidents" && <Incidents incidents={incidents} />}
             {view === "threatintel" && <ThreatIntel incidents={incidents} />}
-            {view === "iam" && <IAMExplorer onRunWhatIf={runWhatIf} />}
+            {view === "iam" && <IAMExplorer onRunWhatIf={runWhatIf} incidents={incidents} />}
           </motion.div>
         </AnimatePresence>
       </div>
 
       <CommanderChat
         commanderBrief={commanderBrief}
-        isProcessing={isProcessing}
+        isProcessingSelected={isProcessingSelected}
         connectionStatus={connectionStatus}
         onSendResponse={sendResponse}
         onAskCommander={askCommander}
-        activeIncidentId={activeIncident?.id ?? null}
+        pendingIncidents={pendingIncidents}
+        selectedIncident={selectedIncident}
+        selectedIncidentId={selectedIncidentId}
+        onSelectIncident={setSelectedIncidentId}
+        autoApproveSecondsLeft={autoApproveSecondsLeft}
+        processingIds={processingIds}
       />
     </div>
   );
