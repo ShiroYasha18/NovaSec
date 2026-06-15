@@ -206,7 +206,7 @@ export function Dashboard({ incidents, isProcessing, isChaosActive, onToggleChao
               <YAxis allowDecimals={false} tick={{ fill: colors.text.tertiary, fontSize: 9 }} axisLine={false} tickLine={false} width={18} />
               <Tooltip
                 contentStyle={{ background: colors.bg.overlay, border: `1px solid ${colors.bg.border}`, borderRadius: 8, fontSize: 11 }}
-                formatter={(v: number) => [v, "incidents"]}
+                formatter={(v) => [v, "incidents"]}
                 labelFormatter={(l) => `Time: ${l}`}
               />
               <Area type="monotone" dataKey="v" stroke={colors.accent.blue} fill="url(#blueGrad)" strokeWidth={2} dot={false} />
