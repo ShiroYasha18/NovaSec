@@ -1,6 +1,6 @@
 # NovaSec — Frontend
 
-Vite + React + TypeScript dashboard for the NovaSec cloud security platform. Real-time incident feed, Commander Chat, IAM Explorer, and a Chaos Monkey that fires random AWS security events every 5 seconds so you can watch the pipeline work.
+Vite + React + TypeScript dashboard for the NovaSec cloud security platform. Real-time incident feed, Commander Chat, IAM Explorer, and a Chaos Monkey that fires random AWS security events every 20 seconds so you can watch the pipeline work.
 
 > For the full project overview see the [root README](../README.md).
 
@@ -67,23 +67,74 @@ The frontend Dockerfile does a multi-stage build (Node builder → nginx:alpine)
 
 ### Dashboard
 
-The landing page. Shows four stat cards (critical threats, active incidents, unique threat actors, MITRE-mapped events), an incident-over-time area chart, a severity donut, an events-by-service bar chart, and a live event feed.
+The landing page — the first thing you see when you open the app.
 
-The **Chaos Monkey** toggle in the top-right fires a random AWS security event every 5 seconds. It is **on by default** so incidents appear immediately when you open the app.
+**Top row — four stat cards:**
+- Critical Threats — count of CRITICAL severity incidents
+- Active Incidents — unresolved incidents right now
+- Threat Actors — unique usernames seen across all events
+- MITRE Mapped — incidents with a confirmed ATT&CK technique
 
-Manual scenario buttons (`+S3`, `+IAM`, `+CLOUDTRAIL`, `+EC2`) let you fire specific event types.
+**Charts row:**
+- *Incidents over Time* — area chart of the last 10 minutes, X axis = time (oldest left → now right), Y axis = incident count. Spike builds on the right as new events arrive.
+- *Severity Distribution* — donut chart breaking down CRITICAL / HIGH / MEDIUM / LOW proportions with a live legend.
+
+**Events by AWS Service** — horizontal bar chart showing which services (S3, IAM, EC2, CloudTrail) are generating the most events.
+
+**Live Event Feed** — scrollable list of the 8 most recent incidents with severity dot, event name, username → resource, MITRE technique badge, and relative timestamp.
+
+**Chaos Monkey** toggle (top-right) fires a random AWS security event every 20 seconds. It is **on by default** so incidents appear immediately when you open the app. Manual `+S3`, `+IAM`, `+CLOUDTRAIL`, `+EC2` buttons let you fire specific scenarios on demand.
+
+---
 
 ### Incidents
 
-Full sortable table of every incident with severity badge, MITRE technique, pattern/evasion flags, and timestamp. Resolved incidents are dimmed.
+Full incident log — every event the pipeline has ever processed.
+
+Each row shows:
+- Severity badge (color-coded CRITICAL → LOW)
+- Event name (e.g. `StopLogging`, `CreateAccessKey`)
+- Username and affected resource
+- MITRE ATT&CK technique ID and tactic
+- `PATTERN` badge if the user has repeated suspicious behaviour
+- `DEFENSE EVASION` badge if evasion was detected
+- `RESOLVED` badge once approved/denied
+- Relative timestamp (e.g. "3 minutes ago")
+
+Resolved incidents are visually dimmed. The list updates in real time as chaos monkey fires.
+
+---
 
 ### Threat Intel
 
-Pattern analysis view. Shows which users are repeat offenders, tactic distribution, and defense evasion detections.
+Pattern and behavioural analysis across all incidents.
+
+- **Repeat Offenders** — users who have triggered multiple incidents, ranked by count
+- **Tactic Breakdown** — which MITRE tactics (Initial Access, Execution, Exfiltration, etc.) are appearing most
+- **Defense Evasion Detections** — highlights any incidents where the attacker tried to hide their tracks (e.g. disabling CloudTrail)
+
+Useful for spotting whether a single bad actor is driving the noise vs. multiple independent events.
+
+---
 
 ### IAM Explorer
 
-Lists all 13 simulated IAM users with their risk level. Click any row to run a Gemini-powered blast radius simulation — what's the worst an attacker could do with that user's credentials? Results include a risk gauge, worst-case scenario, top recommendation, analysis summary, and at-risk resource tags. Results are cached per session so clicking the same user twice is instant.
+User roster for all 13 simulated IAM identities.
+
+**Roster list** — sorted by incident count (most active actors at the top). Each row shows:
+- Avatar colored by risk level
+- Username and dynamically derived role (e.g. "Log Tamperer", "Privilege Escalator", "Repeat Offender") — computed from the user's actual incident history, not hardcoded
+- Incident count
+- Risk badge (CRITICAL / HIGH / MEDIUM / LOW) derived from their worst severity
+
+**Click any row** → inline accordion expands below it with a full Gemini-powered blast radius simulation:
+- Risk gauge (score mapped from blast radius level)
+- Worst-case scenario if credentials were compromised right now
+- Top remediation recommendation
+- 2–3 sentence analysis summary
+- At-risk resource tags (e.g. S3, IAM, EC2)
+
+Results are cached per session — clicking the same user twice is instant, no extra API call.
 
 ---
 
@@ -141,7 +192,7 @@ All state lives in `useNovaSec`. No external state library.
 1. `fireEvent(payload)` creates an optimistic incident immediately (visible in UI)
 2. `POST /api/events/ingest` runs in the background
 3. When it resolves, the optimistic entry is replaced with real data
-4. A per-incident `setTimeout` schedules auto-approve in 5 minutes
+4. A per-incident `setTimeout` schedules auto-approve in 2 minutes
 5. If the user acts first, the timer is cancelled
 
 ---
