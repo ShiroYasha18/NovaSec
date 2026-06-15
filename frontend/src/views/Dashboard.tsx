@@ -99,19 +99,18 @@ const s: Record<string, any> = {
 };
 
 function buildAreaData(incidents: Incident[]) {
-  const buckets: Record<string, number> = {};
   const now = Date.now();
-  for (let i = 9; i >= 0; i--) {
-    const label = `${i}m`;
-    buckets[label] = 0;
-  }
+  // 10 buckets: index 0 = "9m ago", index 9 = "now" — oldest LEFT, newest RIGHT
+  const buckets = Array.from({ length: 10 }, (_, i) => ({
+    t: i === 9 ? "now" : `${9 - i}m ago`,
+    v: 0,
+  }));
   incidents.forEach((inc) => {
-    const age = (now - new Date(inc.timestamp).getTime()) / 60000;
-    const bucket = Math.min(9, Math.floor(age));
-    const label = `${bucket}m`;
-    if (label in buckets) buckets[label]++;
+    const ageMin = (now - new Date(inc.timestamp).getTime()) / 60000;
+    const idx = 9 - Math.min(9, Math.floor(ageMin));
+    if (idx >= 0 && idx < 10) buckets[idx].v++;
   });
-  return Object.entries(buckets).reverse().map(([t, v]) => ({ t, v }));
+  return buckets;
 }
 
 function buildPieData(incidents: Incident[]) {
@@ -191,19 +190,26 @@ export function Dashboard({ incidents, isProcessing, isChaosActive, onToggleChao
 
       <div style={s.chartsRow}>
         <div style={s.card}>
-          <div style={s.cardTitle}>Event Timeline (10m)</div>
-          <ResponsiveContainer width="100%" height={140}>
-            <AreaChart data={areaData}>
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 16 }}>
+            <div style={s.cardTitle as any}>Incidents over Time</div>
+            <span style={{ fontFamily: fonts.mono, fontSize: 9, color: colors.text.tertiary }}>count vs last 10 min</span>
+          </div>
+          <ResponsiveContainer width="100%" height={130}>
+            <AreaChart data={areaData} margin={{ left: 0, right: 4, top: 4, bottom: 0 }}>
               <defs>
                 <linearGradient id="blueGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor={colors.accent.blue} stopOpacity={0.3} />
+                  <stop offset="5%" stopColor={colors.accent.blue} stopOpacity={0.35} />
                   <stop offset="95%" stopColor={colors.accent.blue} stopOpacity={0} />
                 </linearGradient>
               </defs>
-              <XAxis dataKey="t" tick={{ fill: colors.text.tertiary, fontSize: 10 }} axisLine={false} tickLine={false} />
-              <YAxis hide />
-              <Tooltip contentStyle={{ background: colors.bg.overlay, border: `1px solid ${colors.bg.border}`, borderRadius: 8, fontSize: 11 }} />
-              <Area type="monotone" dataKey="v" stroke={colors.accent.blue} fill="url(#blueGrad)" strokeWidth={2} />
+              <XAxis dataKey="t" tick={{ fill: colors.text.tertiary, fontSize: 9 }} axisLine={false} tickLine={false} interval="preserveStartEnd" />
+              <YAxis allowDecimals={false} tick={{ fill: colors.text.tertiary, fontSize: 9 }} axisLine={false} tickLine={false} width={18} />
+              <Tooltip
+                contentStyle={{ background: colors.bg.overlay, border: `1px solid ${colors.bg.border}`, borderRadius: 8, fontSize: 11 }}
+                formatter={(v: number) => [v, "incidents"]}
+                labelFormatter={(l) => `Time: ${l}`}
+              />
+              <Area type="monotone" dataKey="v" stroke={colors.accent.blue} fill="url(#blueGrad)" strokeWidth={2} dot={false} />
             </AreaChart>
           </ResponsiveContainer>
         </div>
