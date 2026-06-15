@@ -10,7 +10,12 @@ build/
 
 # Environment
 .env
+.env.example
 *.local
+
+# Prompts / internal docs
+prompt.md
+prompt2.md
 
 # Data (runtime ledger — not committed)
 backend/data/ledger_store.json
