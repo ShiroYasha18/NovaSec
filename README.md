@@ -2,7 +2,9 @@
 
 **AI-powered cloud security event pipeline with human-in-the-loop incident response.**
 
-NovaSec watches your AWS environment in real time, runs every suspicious event through a 9-agent AI pipeline powered by Google Gemini 2.5 Flash, and surfaces a Commander brief you can approve, deny, or interrogate — all from a single dashboard. Auto-approve kicks in after 5 minutes if you don't act, and the whole thing runs locally with LocalStack so no real AWS credentials are ever needed.
+🔴 **Live demo:** [https://novasec-frontend-1nu2.onrender.com](https://novasec-frontend-1nu2.onrender.com)
+
+NovaSec watches your AWS environment in real time, runs every suspicious event through a 9-agent AI pipeline powered by Google Gemini 2.5 Flash, and surfaces a Commander brief you can approve, deny, or interrogate — all from a single dashboard. Auto-approve kicks in after 2 minutes if you don't act, and the whole thing runs locally with LocalStack so no real AWS credentials are ever needed.
 
 ---
 
@@ -47,7 +49,7 @@ flowchart TD
     EXE --> AWS
 ```
 
-**Human-in-the-loop**: the graph pauses at `IntentParser` (`interrupt_before`) and waits for the operator's decision. Every thread is tracked in `THREAD_STORE` and auto-approved after 5 minutes if no action is taken.
+**Human-in-the-loop**: the graph pauses at `IntentParser` (`interrupt_before`) and waits for the operator's decision. Every thread is tracked in `THREAD_STORE` and auto-approved after 2 minutes if no action is taken.
 
 ---
 
@@ -154,8 +156,8 @@ Runs LocalStack + backend + frontend in one command.
 | Blast radius analysis | Per-user impact assessment powered by Gemini |
 | Pattern detection | Detects repeated suspicious behaviour across a user's history |
 | Human-in-the-loop | Every incident waits for your approve / deny decision |
-| Auto-approve | Falls back to automatic approval after 5 minutes |
-| Chaos Monkey | Fires random AWS security events every 5 seconds for testing |
+| Auto-approve | Falls back to automatic approval after 2 minutes |
+| Chaos Monkey | Fires random AWS security events every 20 seconds for testing |
 | IAM Explorer | Click any IAM user to simulate their blast radius |
 | Commander Chat | Natural language interface to the pipeline — ask anything |
 | Real-time WebSocket | Live Commander briefs pushed to the dashboard instantly |
