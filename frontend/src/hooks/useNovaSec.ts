@@ -40,7 +40,6 @@ export interface Incident {
   commander_brief: string;
   resolved: boolean;
   fix_result?: { success: boolean; error?: string };
-  fix_proposal?: { fix_available: boolean; action?: string; target?: string };
 }
 
 export interface LedgerEntry {
@@ -53,92 +52,77 @@ type ConnectionStatus = "connected" | "disconnected" | "reconnecting";
 
 const WS_URL = "ws://localhost:8001/ws/live";
 const API_BASE = "/api";
+const AUTO_APPROVE_MS = 2 * 60 * 1000;
 
-const SCENARIOS: Record<string, object> = {
-  s3: {
-    source: "aws.s3",
-    "detail-type": "AWS API Call via CloudTrail",
-    detail: {
-      eventSource: "aws.s3",
-      eventName: "PutBucketAcl",
-      requestParameters: { bucketName: "novasec-demo-bucket", AccessControlPolicy: { CannedACL: "public-read" } },
-      userIdentity: { userName: "dev-temp" },
-      eventTime: new Date().toISOString(),
-    },
-  },
-  iam: {
-    source: "aws.iam",
-    "detail-type": "AWS API Call via CloudTrail",
-    detail: {
-      eventSource: "aws.iam",
-      eventName: "CreateAccessKey",
-      requestParameters: { userName: "dev-temp" },
-      userIdentity: { userName: "admin-user" },
-      eventTime: new Date().toISOString(),
-    },
-  },
-  cloudtrail: {
-    source: "aws.cloudtrail",
-    "detail-type": "AWS API Call via CloudTrail",
-    detail: {
-      eventSource: "aws.cloudtrail",
-      eventName: "StopLogging",
-      requestParameters: { name: "novasec-trail" },
-      userIdentity: { userName: "unknown-user" },
-      eventTime: new Date().toISOString(),
-    },
-  },
-  ec2: {
-    source: "aws.ec2",
-    "detail-type": "AWS API Call via CloudTrail",
-    detail: {
-      eventSource: "aws.ec2",
-      eventName: "AuthorizeSecurityGroupIngress",
-      requestParameters: { groupId: "sg-prod-01", IpPermissions: [{ IpProtocol: "-1", IpRanges: [{ CidrIp: "0.0.0.0/0" }] }] },
-      userIdentity: { userName: "ops-user" },
-      eventTime: new Date().toISOString(),
-    },
-  },
+const USERS = [
+  "dev-temp", "admin-user", "ops-user", "unknown-user",
+  "malicious-mike", "contractor-01", "svc-account-prod",
+  "intern-john", "root-backdoor", "ci-bot-staging",
+  "pentest-external", "alice-devops", "bob-infra",
+];
+
+function pick<T>(arr: T[]): T { return arr[Math.floor(Math.random() * arr.length)]; }
+function randId(): string { return Math.random().toString(36).slice(2, 7); }
+
+const SCENARIO_BUILDERS: Record<string, () => object> = {
+  s3: () => ({
+    source: "aws.s3", "detail-type": "AWS API Call via CloudTrail",
+    detail: { eventSource: "aws.s3", eventName: "PutBucketAcl",
+      requestParameters: { bucketName: `bucket-${randId()}`, AccessControlPolicy: { CannedACL: "public-read" } },
+      userIdentity: { userName: pick(USERS) }, eventTime: new Date().toISOString() },
+  }),
+  iam: () => ({
+    source: "aws.iam", "detail-type": "AWS API Call via CloudTrail",
+    detail: { eventSource: "aws.iam", eventName: "CreateAccessKey",
+      requestParameters: { userName: pick(USERS) },
+      userIdentity: { userName: pick(USERS) }, eventTime: new Date().toISOString() },
+  }),
+  cloudtrail: () => ({
+    source: "aws.cloudtrail", "detail-type": "AWS API Call via CloudTrail",
+    detail: { eventSource: "aws.cloudtrail", eventName: "StopLogging",
+      requestParameters: { name: "main-trail" },
+      userIdentity: { userName: pick(USERS) }, eventTime: new Date().toISOString() },
+  }),
+  ec2: () => ({
+    source: "aws.ec2", "detail-type": "AWS API Call via CloudTrail",
+    detail: { eventSource: "aws.ec2", eventName: "AuthorizeSecurityGroupIngress",
+      requestParameters: { groupId: `sg-${randId()}`, IpPermissions: [{ IpProtocol: "-1", IpRanges: [{ CidrIp: "0.0.0.0/0" }] }] },
+      userIdentity: { userName: pick(USERS) }, eventTime: new Date().toISOString() },
+  }),
 };
 
 export function useNovaSec() {
   const [incidents, setIncidents] = useState<Incident[]>([]);
-  const [activeIncident, setActiveIncident] = useState<Incident | null>(null);
-  const [isProcessing, setIsProcessing] = useState(false);
+  const [selectedIncidentId, setSelectedIncidentId] = useState<string | null>(null);
+  const [processingIds, setProcessingIds] = useState<Set<string>>(new Set());
   const [commanderBrief, setCommanderBrief] = useState<string | null>(null);
   const [ledger, setLedger] = useState<LedgerEntry[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("disconnected");
+  const [autoApproveSecondsLeft, setAutoApproveSecondsLeft] = useState<number | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectDelay = useRef(1000);
+  // per-incident auto-approve timers
+  const autoApproveTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const countdownInterval = useRef<ReturnType<typeof setInterval> | null>(null);
+  const countdownDeadline = useRef<{ id: string; deadline: number } | null>(null);
 
+  // ── WebSocket ──────────────────────────────────────────────────────────────
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
     setConnectionStatus("reconnecting");
-
     try {
       const ws = new WebSocket(WS_URL);
       wsRef.current = ws;
-
-      ws.onopen = () => {
-        setConnectionStatus("connected");
-        reconnectDelay.current = 1000;
-      };
-
+      ws.onopen = () => { setConnectionStatus("connected"); reconnectDelay.current = 1000; };
       ws.onmessage = (e) => {
         try {
           const msg = JSON.parse(e.data);
-          if (typeof msg === "string") {
-            setCommanderBrief(msg);
-            return;
-          }
+          if (typeof msg === "string") { setCommanderBrief(msg); return; }
           if (msg.commander_brief) setCommanderBrief(msg.commander_brief);
-        } catch {
-          setCommanderBrief(e.data);
-        }
+        } catch { setCommanderBrief(e.data); }
       };
-
       ws.onclose = () => {
         setConnectionStatus("disconnected");
         reconnectTimer.current = setTimeout(() => {
@@ -146,95 +130,223 @@ export function useNovaSec() {
           connect();
         }, reconnectDelay.current);
       };
-
       ws.onerror = () => ws.close();
-    } catch {
-      setConnectionStatus("disconnected");
-    }
+    } catch { setConnectionStatus("disconnected"); }
   }, []);
 
   useEffect(() => {
     connect();
     return () => {
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+      if (countdownInterval.current) clearInterval(countdownInterval.current);
+      autoApproveTimers.current.forEach((t) => clearTimeout(t));
       wsRef.current?.close();
     };
   }, [connect]);
 
-  const fireEvent = useCallback(async (scenario: string): Promise<Incident | null> => {
-    const payload = SCENARIOS[scenario];
-    if (!payload) return null;
-
-    setIsProcessing(true);
-    try {
-      const res = await fetch(`${API_BASE}/events/ingest`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const data = await res.json();
-      if (!data.incident) { setIsProcessing(false); return null; }
-
-      const inc: Incident = {
-        id: data.thread_id,
-        timestamp: new Date().toISOString(),
-        username: data.incident?.summary?.match(/by (\S+)/)?.[1] ??
-          (payload as any).detail?.userIdentity?.userName ?? "unknown",
-        resource: data.incident?.affected_resource ?? "unknown",
-        severity: data.incident?.severity ?? "LOW",
-        eventName: (payload as any).detail?.eventName ?? scenario,
-        service: (payload as any).detail?.eventSource ?? "aws",
-        mitre: data.incident?.mitre,
-        blast_radius: data.blast_radius,
-        threat_context: data.threat_context,
-        pattern_detected: data.threat_context?.pattern_detected ?? false,
-        defense_evasion_detected: data.incident?.defense_evasion_detected ?? false,
-        commander_brief: data.commander_brief ?? "",
-        resolved: data.resolved ?? false,
-        fix_proposal: undefined,
-      };
-
-      setIncidents((prev) => [inc, ...prev].slice(0, 50));
-      setActiveIncident(inc);
-      setCommanderBrief(data.commander_brief ?? null);
-      return inc;
-    } catch (err) {
-      console.error("fireEvent error", err);
-      return null;
-    } finally {
-      setIsProcessing(false);
-    }
+  // ── Countdown ticker (shows remaining time for selected incident) ───────────
+  const startCountdown = useCallback((incidentId: string) => {
+    if (countdownInterval.current) clearInterval(countdownInterval.current);
+    const deadline = Date.now() + AUTO_APPROVE_MS;
+    countdownDeadline.current = { id: incidentId, deadline };
+    setAutoApproveSecondsLeft(Math.round(AUTO_APPROVE_MS / 1000));
+    countdownInterval.current = setInterval(() => {
+      const left = Math.round((deadline - Date.now()) / 1000);
+      setAutoApproveSecondsLeft(left > 0 ? left : 0);
+    }, 1000);
   }, []);
 
-  const sendResponse = useCallback(async (transcript: string) => {
-    setIsProcessing(true);
+  const clearCountdown = useCallback(() => {
+    if (countdownInterval.current) clearInterval(countdownInterval.current);
+    countdownInterval.current = null;
+    countdownDeadline.current = null;
+    setAutoApproveSecondsLeft(null);
+  }, []);
+
+  // When selected incident changes, update the countdown display
+  useEffect(() => {
+    if (!selectedIncidentId) { clearCountdown(); return; }
+    // Check if selected incident has a timer
+    const hasTimer = autoApproveTimers.current.has(selectedIncidentId);
+    if (hasTimer) {
+      startCountdown(selectedIncidentId);
+    } else {
+      clearCountdown();
+    }
+  }, [selectedIncidentId, startCountdown, clearCountdown]);
+
+  // ── Auto-approve a specific incident ──────────────────────────────────────
+  const scheduleAutoApprove = useCallback((incidentId: string) => {
+    // Clear any existing timer for this incident
+    const existing = autoApproveTimers.current.get(incidentId);
+    if (existing) clearTimeout(existing);
+
+    const timer = setTimeout(async () => {
+      autoApproveTimers.current.delete(incidentId);
+      try {
+        const res = await fetch(`${API_BASE}/events/respond`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ voice_transcript: "approve", thread_id: incidentId }),
+        });
+        const data = await res.json();
+        setIncidents((prev) =>
+          prev.map((inc) =>
+            inc.id === incidentId
+              ? { ...inc, resolved: true, fix_result: data.fix_result }
+              : inc
+          )
+        );
+        setSelectedIncidentId((cur) => (cur === incidentId ? null : cur));
+        if (data.commander_brief)
+          setCommanderBrief(`[AUTO] ${data.commander_brief}`);
+        if (data.ledger) setLedger(data.ledger);
+      } catch (e) { console.error("auto-approve failed", e); }
+    }, AUTO_APPROVE_MS);
+
+    autoApproveTimers.current.set(incidentId, timer);
+    // If this incident is currently selected, start the countdown display
+    setSelectedIncidentId((cur) => {
+      if (!cur || cur === incidentId) startCountdown(incidentId);
+      return cur ?? incidentId;
+    });
+  }, [startCountdown]);
+
+  // ── Fire event (fire-and-forget — doesn't block subsequent fires) ──────────
+  const fireEvent = useCallback((scenarioOrPayload: string | object): void => {
+    const payload =
+      typeof scenarioOrPayload === "string"
+        ? SCENARIO_BUILDERS[scenarioOrPayload]?.()
+        : scenarioOrPayload;
+    if (!payload) return;
+
+    // Generate an optimistic placeholder id — will be replaced with real thread_id
+    const optimisticId = `pending-${randId()}`;
+
+    const detail = (payload as any).detail ?? {};
+    const optimistic: Incident = {
+      id: optimisticId,
+      timestamp: new Date().toISOString(),
+      username: detail?.userIdentity?.userName ?? "unknown",
+      resource: "processing…",
+      severity: "MEDIUM",
+      eventName: detail?.eventName ?? "UnknownEvent",
+      service: detail?.eventSource ?? "aws",
+      pattern_detected: false,
+      defense_evasion_detected: false,
+      commander_brief: "",
+      resolved: false,
+    };
+
+    setIncidents((prev) => [optimistic, ...prev].slice(0, 100));
+    setProcessingIds((prev) => new Set(prev).add(optimisticId));
+    // Auto-select first incident if nothing selected
+    setSelectedIncidentId((cur) => cur ?? optimisticId);
+
+    fetch(`${API_BASE}/events/ingest`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (!data.thread_id) return;
+        const realId = data.thread_id;
+
+        const real: Incident = {
+          id: realId,
+          timestamp: optimistic.timestamp,
+          username: detail?.userIdentity?.userName ?? "unknown",
+          resource: data.incident?.affected_resource ?? "unknown",
+          severity: data.incident?.severity ?? "LOW",
+          eventName: detail?.eventName ?? "UnknownEvent",
+          service: detail?.eventSource ?? "aws",
+          mitre: data.incident?.mitre,
+          blast_radius: data.blast_radius,
+          threat_context: data.threat_context,
+          pattern_detected: data.threat_context?.pattern_detected ?? false,
+          defense_evasion_detected: data.incident?.defense_evasion_detected ?? false,
+          commander_brief: data.commander_brief ?? "",
+          resolved: data.resolved ?? false,
+        };
+
+        setIncidents((prev) =>
+          prev.map((inc) => (inc.id === optimisticId ? real : inc))
+        );
+        setProcessingIds((prev) => {
+          const next = new Set(prev);
+          next.delete(optimisticId);
+          return next;
+        });
+        setSelectedIncidentId((cur) =>
+          cur === optimisticId ? realId : cur
+        );
+
+        if (!real.resolved) scheduleAutoApprove(realId);
+        if (data.commander_brief) setCommanderBrief(data.commander_brief);
+      })
+      .catch((err) => {
+        console.error("fireEvent error", err);
+        setIncidents((prev) => prev.filter((inc) => inc.id !== optimisticId));
+        setProcessingIds((prev) => {
+          const next = new Set(prev);
+          next.delete(optimisticId);
+          return next;
+        });
+      });
+  }, [scheduleAutoApprove]);
+
+  // ── Send response for a specific incident ─────────────────────────────────
+  const sendResponse = useCallback(async (transcript: string, threadId: string) => {
+    // Cancel auto-approve for this incident
+    const timer = autoApproveTimers.current.get(threadId);
+    if (timer) { clearTimeout(timer); autoApproveTimers.current.delete(threadId); }
+    if (countdownDeadline.current?.id === threadId) clearCountdown();
+
+    setProcessingIds((prev) => new Set(prev).add(threadId));
     try {
       const res = await fetch(`${API_BASE}/events/respond`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ voice_transcript: transcript }),
+        body: JSON.stringify({ voice_transcript: transcript, thread_id: threadId }),
       });
       const data = await res.json();
-      setActiveIncident((prev) =>
-        prev ? { ...prev, resolved: data.resolved, fix_result: data.fix_result } : null
-      );
+
       setIncidents((prev) =>
         prev.map((inc) =>
-          inc.id === activeIncident?.id
+          inc.id === threadId
             ? { ...inc, resolved: data.resolved, fix_result: data.fix_result }
             : inc
         )
       );
       if (data.commander_brief) setCommanderBrief(data.commander_brief);
       if (data.ledger) setLedger(data.ledger);
-      if (data.resolved) setActiveIncident(null);
+
+      if (data.resolved) {
+        // Move selection to next pending incident
+        setSelectedIncidentId((cur) => {
+          if (cur !== threadId) return cur;
+          setIncidents((latest) => {
+            const next = latest.find((i) => !i.resolved && i.id !== threadId);
+            if (next) startCountdown(next.id);
+            setTimeout(() => setSelectedIncidentId(next?.id ?? null), 0);
+            return latest;
+          });
+          return null;
+        });
+      }
     } catch (err) {
       console.error("sendResponse error", err);
     } finally {
-      setIsProcessing(false);
+      setProcessingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(threadId);
+        return next;
+      });
     }
-  }, [activeIncident]);
+  }, [clearCountdown, startCountdown]);
 
+  // ── Commander NL query ─────────────────────────────────────────────────────
   const askCommander = useCallback(async (question: string): Promise<string> => {
     try {
       const res = await fetch(`${API_BASE}/query`, {
@@ -244,9 +356,7 @@ export function useNovaSec() {
       });
       const data = await res.json();
       return data.answer ?? "No answer available.";
-    } catch {
-      return "Could not reach Commander.";
-    }
+    } catch { return "Could not reach Commander."; }
   }, []);
 
   const runWhatIf = useCallback(async (username: string) => {
@@ -258,9 +368,25 @@ export function useNovaSec() {
     return res.json();
   }, []);
 
+  const pendingIncidents = incidents.filter((i) => !i.resolved);
+  const selectedIncident = incidents.find((i) => i.id === selectedIncidentId) ?? null;
+  const isProcessingSelected = selectedIncidentId ? processingIds.has(selectedIncidentId) : false;
+
   return {
-    incidents, activeIncident, isProcessing,
-    commanderBrief, ledger, connectionStatus,
-    fireEvent, sendResponse, askCommander, runWhatIf,
+    incidents,
+    pendingIncidents,
+    selectedIncident,
+    selectedIncidentId,
+    setSelectedIncidentId,
+    processingIds,
+    isProcessingSelected,
+    commanderBrief,
+    ledger,
+    connectionStatus,
+    autoApproveSecondsLeft,
+    fireEvent,
+    sendResponse,
+    askCommander,
+    runWhatIf,
   };
 }
