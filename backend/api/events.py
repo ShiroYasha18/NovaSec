@@ -3,7 +3,7 @@
 import time
 from uuid import uuid4
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from core.graph import novasec_graph, THREAD_STORE
@@ -15,6 +15,7 @@ router = APIRouter()
 
 class RespondBody(BaseModel):
     voice_transcript: str
+    thread_id: str  # must target a specific pending thread
 
 
 @router.post("/api/events/ingest")
@@ -35,13 +36,19 @@ async def ingest_event(body: dict):
         "threat_context": None,
         "blast_radius": None,
     }
-    THREAD_STORE["active"] = thread_id
-    config = {"configurable": {"thread_id": thread_id}}
 
+    # Register as pending before pipeline starts
+    THREAD_STORE[thread_id] = {"started_at": time.time(), "resolved": False}
+
+    config = {"configurable": {"thread_id": thread_id}}
     await novasec_graph.ainvoke(state, config=config)
 
     current = await novasec_graph.aget_state(config)
     current_state = current.values
+
+    # Mark resolved if pipeline ended without interrupt
+    if current_state.get("resolved"):
+        THREAD_STORE[thread_id]["resolved"] = True
 
     await broadcast(current_state.get("commander_brief") or "")
 
@@ -57,7 +64,13 @@ async def ingest_event(body: dict):
 
 @router.post("/api/events/respond")
 async def respond_to_event(body: RespondBody):
-    thread_id = THREAD_STORE.get("active")
+    thread_id = body.thread_id
+    info = THREAD_STORE.get(thread_id)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"Thread {thread_id} not found")
+    if info.get("resolved"):
+        raise HTTPException(status_code=409, detail=f"Thread {thread_id} already resolved")
+
     config = {"configurable": {"thread_id": thread_id}}
 
     await novasec_graph.aupdate_state(config, {"user_intent": body.voice_transcript})
@@ -71,7 +84,10 @@ async def respond_to_event(body: RespondBody):
     ledger = final_state.get("ledger", [])
     await append_session(ledger)
 
+    THREAD_STORE[thread_id]["resolved"] = True
+
     return {
+        "thread_id": thread_id,
         "resolved": final_state.get("resolved"),
         "fix_result": final_state.get("fix_result"),
         "commander_brief": final_state.get("commander_brief"),
@@ -79,11 +95,16 @@ async def respond_to_event(body: RespondBody):
     }
 
 
+@router.get("/api/events/pending")
+async def get_pending():
+    return [
+        {"thread_id": tid, "started_at": info["started_at"]}
+        for tid, info in THREAD_STORE.items()
+        if not info.get("resolved")
+    ]
+
+
 @router.get("/api/ledger")
 async def get_ledger():
-    thread_id = THREAD_STORE.get("active")
-    if not thread_id:
-        return []
-    config = {"configurable": {"thread_id": thread_id}}
-    state = await novasec_graph.aget_state(config)
-    return state.values.get("ledger", [])
+    # Return merged ledger from all threads in store
+    return list(THREAD_STORE.keys())
