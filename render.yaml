@@ -1,0 +1,39 @@
+services:
+  # ── Backend — FastAPI + LangGraph pipeline ──────────────────────────────────
+  - type: web
+    name: novasec-backend
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    plan: free
+    envVars:
+      - key: GOOGLE_API_KEY
+        sync: false          # set this manually in the Render dashboard
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: USE_LOCALSTACK
+        value: "false"       # no LocalStack on Render — AWS calls degrade gracefully
+      - key: AWS_DEFAULT_REGION
+        value: us-east-1
+      - key: AWS_ACCESS_KEY_ID
+        value: test
+      - key: AWS_SECRET_ACCESS_KEY
+        value: test
+
+  # ── Frontend — Vite + React static site ────────────────────────────────────
+  - type: static
+    name: novasec-frontend
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: VITE_BACKEND_URL
+        fromService:
+          name: novasec-backend
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL   # auto-set by Render for every web service
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html           # SPA fallback for client-side routing

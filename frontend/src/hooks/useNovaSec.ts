@@ -50,8 +50,13 @@ export interface LedgerEntry {
 
 type ConnectionStatus = "connected" | "disconnected" | "reconnecting";
 
-const WS_URL = "ws://localhost:8001/ws/live";
-const API_BASE = "/api";
+// In production VITE_BACKEND_URL is the Render backend URL (e.g. https://novasec-backend.onrender.com)
+// In dev the Vite proxy forwards /api and /ws to localhost:8001
+const _backend = (import.meta.env.VITE_BACKEND_URL ?? "").replace(/\/$/, "");
+const API_BASE  = _backend ? `${_backend}/api` : "/api";
+const WS_URL    = _backend
+  ? `${_backend.replace(/^https/, "wss").replace(/^http/, "ws")}/ws/live`
+  : "ws://localhost:8001/ws/live";
 const AUTO_APPROVE_MS = 2 * 60 * 1000;
 
 const USERS = [
