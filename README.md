@@ -4,7 +4,7 @@
 
 🔴 **Live demo:** [https://novasec-frontend-1nu2.onrender.com](https://novasec-frontend-1nu2.onrender.com)
 
-NovaSec watches your AWS environment in real time, runs every suspicious event through a 9-agent AI pipeline powered by Google Gemini 2.5 Flash, and surfaces a Commander brief you can approve, deny, or interrogate — all from a single dashboard. Auto-approve kicks in after 2 minutes if you don't act, and the whole thing runs locally with LocalStack so no real AWS credentials are ever needed.
+Cloud security today is broken in two opposite ways — either you drown in raw CloudTrail noise with no context, or you wait days for a human analyst to tell you something already went wrong. NovaSec fixes this by sitting at the exact middle: the moment a suspicious AWS event fires, it runs through a 9-agent AI pipeline powered by Google Gemini 2.5 Flash that triages the event, pulls the user's full incident history, maps the attack to a MITRE ATT&CK technique, calculates the blast radius of what the attacker could have touched, proposes a concrete boto3 remediation action, and delivers a plain-English Commander brief to your dashboard in seconds — all while keeping a human in control of every consequential decision. You approve or deny the fix; if you don't act within 2 minutes, the system auto-approves to prevent stale threats sitting unresolved. The result is mean-time-to-response measured in seconds rather than hours, a full audit ledger of every agent decision, and a system that gets smarter with every incident because Memory Agent tracks repeat offenders across sessions and escalates them automatically.
 
 ---
 
